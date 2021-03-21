@@ -7,8 +7,10 @@
  */
 
 plugins {
-    // Apply the java-library plugin to add support for Java Library
-    id 'java-library'
+	// Apply the application plugin to add support for building a CLI application in Java.
+    id 'application'
+    id 'java'
+    id 'eclipse'
 }
 
 repositories {
@@ -23,5 +25,10 @@ dependencies {
 	implementation 'com.google.code.gson:gson:2.8.6'
 	// https://mvnrepository.com/artifact/com.h2database/h2
 	implementation group: 'com.h2database', name: 'h2', version: '1.4.200'
-	
 }
+
+run {
+	standardInput = System.in
+}
+
+mainClassName = "Start"
