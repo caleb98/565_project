@@ -1,3 +1,7 @@
+# Project Specific
+auction_data_*
+cleaned_auction_data_*
+
 # Compiled source #
 ###################
 *.com

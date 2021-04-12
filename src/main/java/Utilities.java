@@ -1,12 +1,18 @@
 import java.io.File;
+import java.io.FileNotFoundException;
 import java.io.FileReader;
 import java.io.FileWriter;
+import java.io.IOException;
 import java.lang.reflect.Type;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.Scanner;
 
 import org.apache.http.NameValuePair;
 import org.apache.http.message.BasicNameValuePair;
@@ -188,6 +194,254 @@ public class Utilities {
 		} catch(Exception e) {
 			e.printStackTrace();
 		} finally {	
+			if(conn != null) {
+				try {
+					conn.close();
+				} catch (SQLException e) {
+					e.printStackTrace();
+				}
+			}
+		}
+	}
+	
+	/**
+	 * Dumps auction data from all realms into a single JSON file.
+	 */
+	public static void dumpAuctionData() {
+		try {
+			BattlenetAPIConnection conn = new BattlenetAPIConnection();
+			
+			if(!conn.connect()) {
+				System.out.println("Unable to retrieve token for BattleNet api.");
+				return;
+			}
+			
+			// Get a list of realms
+			ArrayList<NameValuePair> params = new ArrayList<>();
+			params.add(new BasicNameValuePair("namespace", "dynamic-us"));
+			params.add(new BasicNameValuePair("locale", "en_US"));
+			
+			JsonObject realmJson = conn.request("https://us.api.blizzard.com/data/wow/connected-realm/index", params);
+			JsonArray realmsArray = realmJson.get("connected_realms").getAsJsonArray();
+			
+			// Loop through each realm and build auction data
+			JsonObject auctionData = new JsonObject();
+			auctionData.add("data", new JsonArray());
+			int num = 1;
+			for(JsonElement realmEntry : realmsArray) {
+				
+				JsonObject realmAuctionData = new JsonObject();
+				JsonObject entry = realmEntry.getAsJsonObject();
+				
+				// Get request url
+				String url = entry.get("href").getAsString();
+				
+				// Make request
+				params.clear();
+				JsonObject realmInfo = conn.request(url, params);
+
+				// Get the realm id
+				int realmId = realmInfo.get("id").getAsInt();
+				
+				System.out.printf("Getting auction data for realm group id %d (%d/%d)...",
+						realmId, num, realmsArray.size());
+				
+				// Request auction data for realm id
+				url = realmInfo.get("auctions").getAsJsonObject().get("href").getAsString();
+				System.out.println("\t" + url);
+				params.clear();
+				JsonObject auctions = conn.request(url, params);
+				
+				JsonArray auctionsArray = auctions.get("auctions").getAsJsonArray();
+				
+				realmAuctionData.addProperty("realmId", realmId);
+				realmAuctionData.add("auctions", auctionsArray);
+				
+				auctionData.get("data").getAsJsonArray().add(realmAuctionData);
+				
+				num++;
+			}
+			
+			// Save auction data to a file
+			LocalDateTime now = LocalDateTime.now();
+			DateTimeFormatter dtf = DateTimeFormatter.ofPattern("yyyy_MM_dd");
+			String date = dtf.format(now);
+			JsonWriter writer = new JsonWriter(new FileWriter("auction_data_" + date + ".json"));
+			Json.toJson(auctionData, writer);
+			writer.flush();
+			writer.close();
+			
+			System.out.println("Auction data dumped!");
+			
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+	}
+	
+	/**
+	 * 
+	 */
+	public static void cleanAuctionData() {
+		
+		// Get list of files that are available
+		File[] files = new File(".").listFiles((f) -> {
+			return f.getName().matches("^auction_data_.*");
+		});
+		
+		// Display list
+		System.out.println("\nAvailable Data Files:");
+		for(int i = 0; i < files.length; i++) {
+			System.out.printf("\t%d. %s\n", i+1, files[i].getName());
+		}
+		
+		// Get selection from user
+		@SuppressWarnings("resource")
+		Scanner keyboard = new Scanner(System.in);
+		int input = -1;
+		while(input == -1) {
+			System.out.print("\nEnter file # to clean: ");
+			try {
+				input = Integer.valueOf(keyboard.nextLine());
+			} catch (Exception e) {
+				System.out.println("Invalid file number.");
+				continue;
+			}
+			
+			if(input < 1 || input > files.length) {
+				System.out.println("Invalid file number.");
+				input = -1;
+			}
+		}
+		
+		// Read in the data
+		File fileToClean = files[input - 1];
+		JsonReader reader;
+		try {
+			reader = new JsonReader(new FileReader(fileToClean));
+		} catch (FileNotFoundException e) {
+			e.printStackTrace();
+			return;
+		}
+		JsonObject dataRaw = Json.fromJson(reader, JsonObject.class);
+		JsonArray data = dataRaw.get("data").getAsJsonArray();
+		
+		// Look through the data.
+		for(JsonElement realmData : data) {
+			JsonObject realmDataObj = realmData.getAsJsonObject();
+			JsonArray auctions = realmDataObj.get("auctions").getAsJsonArray();
+			Iterator<JsonElement> iter = auctions.iterator();
+			while(iter.hasNext()) {
+				// See if pet with id exists
+				JsonObject auction = iter.next().getAsJsonObject();
+				JsonObject item = auction.get("item").getAsJsonObject();
+				int itemId = item.get("id").getAsInt();
+				
+				// 82800 is the id for "Pet Cage" which all battle pets are sold as
+				if(itemId != 82800) {
+					iter.remove();
+				}
+				else {
+					System.out.println("Keeping auction for pet id " + item.get("pet_species_id").getAsInt());
+				}
+			}
+		}
+		
+		// Json now removed all non-pet entries. Save it as a cleaned version.
+		try {
+			File output = new File("cleaned_" + fileToClean.getName());
+			JsonWriter writer = new JsonWriter(new FileWriter(output));
+			Json.toJson(dataRaw, writer);
+			writer.flush();
+			writer.close();
+		} catch(IOException e) {
+			e.printStackTrace();
+		}
+			
+		// Loading in the data has a lot of overhead, so go ahead and
+		// garbage collect once we're done.
+		System.gc();
+	}
+	
+	public static void createAuctionDatabase() {
+		// Load driver class
+		try {
+			Class.forName("org.h2.Driver");
+		} catch (ClassNotFoundException e) {
+			e.printStackTrace();
+			return;
+		}
+		
+		// Delete database if exists
+		File db = new File("./auction_data.mv.db");
+		if(db.exists()) {
+			db.delete();
+		}
+		
+		Connection conn = null;
+		try {
+			conn = DriverManager.getConnection("jdbc:h2:./auction_data", "user", "");
+			
+			Statement stmt = conn.createStatement();
+			
+			// Create the table if necessary
+			String sql = "CREATE TABLE auction_data ("
+					+ "id INT NOT NULL,"
+					+ "pet_id INT NOT NULL,"
+					+ "buyout INT NOT NULL,"
+					+ "realm_id INT NOT NULL,"
+					+ "PRIMARY KEY ( id )"
+					+ ")";
+			stmt.execute(sql);
+			
+			// Get auction data files
+			File[] files = new File(".").listFiles((f) -> {
+				return f.getName().startsWith("cleaned_auction_data_");
+			});
+			
+			for(File jsonFile : files) {
+				try {
+					// Get raw data
+					JsonReader reader = new JsonReader(new FileReader(jsonFile));
+					JsonObject dataRaw = Json.fromJson(reader, JsonObject.class);
+					JsonArray realms = dataRaw.get("data").getAsJsonArray();
+					
+					// Loop through each realm's data
+					for(JsonElement realmRaw : realms) {
+						JsonObject realmObj = realmRaw.getAsJsonObject();
+						JsonArray auctions = realmObj.get("auctions").getAsJsonArray();
+						int realmId = realmObj.get("realmId").getAsInt();
+						
+						// Loop through each auction on this realm
+						for(JsonElement auction : auctions) {
+							JsonObject auctionObj = auction.getAsJsonObject();
+							
+							// If no buyout is listed, ignore.
+							if(!auctionObj.has("buyout")) {
+								continue;
+							}
+							
+							sql = String.format("INSERT INTO auction_data VALUES (%d, %d, %d, %d)", 
+									auctionObj.get("id").getAsInt(),
+									auctionObj.get("item").getAsJsonObject().get("pet_species_id").getAsInt(),
+									auctionObj.get("buyout").getAsInt(),
+									realmId
+							);
+							
+							stmt.execute(sql);
+							
+							System.out.println(sql);
+							
+						}
+					}
+				} catch (IOException e) {
+					System.err.println("Unable to process auction data file " + jsonFile.getName() + ": " + e.getMessage());
+				}
+			}
+			
+		} catch (SQLException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		} finally {
 			if(conn != null) {
 				try {
 					conn.close();

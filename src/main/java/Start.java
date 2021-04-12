@@ -21,15 +21,9 @@ public class Start {
 				break;
 				
 			case 1:
-				if(System.getenv("BNET_CLIENT_ID") == null) {
-					System.out.println("BNET_CLIENT_ID environment variable not set!");
-					break;
+				if(hasEnvironmentVariables()) {
+					Utilities.requestPetDataFromBnetApi();
 				}
-				else if(System.getenv("BNET_CLIENT_SECRET") == null) {
-					System.out.println("BNET_CLIENT_SECRET environment variable not set!");
-					break;
-				}
-				Utilities.requestPetDataFromBnetApi();
 				break;
 				
 			case 2:
@@ -40,12 +34,38 @@ public class Start {
 				Utilities.createPetDatabaseFromJson();
 				System.out.println();
 				break;
+				
+			case 3:
+				if(hasEnvironmentVariables()) {
+					Utilities.dumpAuctionData();
+				}
+				break;
+				
+			case 4:
+				Utilities.cleanAuctionData();
+				break;
+				
+			case 5:
+				Utilities.createAuctionDatabase();
+				break;
 			
 			}
 		}
 		
 		keyboard.close();
 		
+	}
+	
+	private static boolean hasEnvironmentVariables() {
+		if(System.getenv("BNET_CLIENT_ID") == null) {
+			System.out.println("BNET_CLIENT_ID environment variable not set!");
+			return false;
+		}
+		else if(System.getenv("BNET_CLIENT_SECRET") == null) {
+			System.out.println("BNET_CLIENT_SECRET environment variable not set!");
+			return false;
+		}
+		return true;
 	}
 	
 	private static int getSelection(String input) {
@@ -62,7 +82,9 @@ public class Start {
 		System.out.println("0. Exit");
 		System.out.println("1. Request Pet Data (Requires API Environment Variables Set)");
 		System.out.println("2. Build Pet Database from Json File");
-		System.out.println();
+		System.out.println("3. Dump Auction Data");
+		System.out.println("4. Clean Auction Data");
+		System.out.println("5. Create Auction Database");
 	}
 	
 }
