@@ -80,11 +80,12 @@ public class Start {
 	private static void printMenu() {
 		System.out.println("Select an action:");
 		System.out.println("0. Exit");
-		System.out.println("1. Request Pet Data (Requires API Environment Variables Set)");
+		System.out.println("1. Request Pet Data*");
 		System.out.println("2. Build Pet Database from Json File");
-		System.out.println("3. Dump Auction Data");
+		System.out.println("3. Dump Auction Data*");
 		System.out.println("4. Clean Auction Data");
 		System.out.println("5. Create Auction Database");
+		System.out.println("(*Requires BNET_CLIENT_ID and BNET_CLIENT_SECRET environment variables.)");
 	}
 	
 }
