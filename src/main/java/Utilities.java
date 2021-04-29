@@ -6,11 +6,13 @@ import java.io.IOException;
 import java.lang.reflect.Type;
 import java.sql.Connection;
 import java.sql.DriverManager;
+import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Iterator;
 import java.util.Scanner;
 
@@ -32,7 +34,7 @@ public class Utilities {
 	 * 
 	 * This method will take a long time and makes 1k+ http requests.
 	 */
-	public static void requestPetDataFromBnetApi() {
+	public static void requestPetData() {
 		try {
 			BattlenetAPIConnection api = new BattlenetAPIConnection();
 			
@@ -116,61 +118,138 @@ public class Utilities {
 	}
 	
 	/**
+	 * Connects to the battlenet API and makes requests for data
+	 * for each pet ability listed in the pet ability index api
+	 * call.
+	 * 
+	 * This method makes ~700 requests at the time of writing, and
+	 * takes a few minutes to complete.
+	 */
+	public static void requestAbilityData() {
+		try {
+			BattlenetAPIConnection api = new BattlenetAPIConnection();
+			
+			if(!api.connect()) {
+				System.out.println("Unable to retrieve token for bnet api.");
+				return;
+			}
+			
+			// Get index of abilities.
+			ArrayList<NameValuePair> params = new ArrayList<>();
+			params.add(new BasicNameValuePair("namespace", "static-us"));
+			params.add(new BasicNameValuePair("locale", "en_US"));
+			JsonObject obj = api.request("https://us.api.blizzard.com/data/wow/pet-ability/index", params);
+			params.clear();
+			
+			JsonArray abilities = obj.get("abilities").getAsJsonArray();
+			
+			JsonArray data = new JsonArray();
+			
+			int processed = 1;
+			
+			// Look at each ability, grab it's info, add it to the database
+			for(JsonElement abilityElement : abilities) {
+				String abilityId = abilityElement.getAsJsonObject().get("id").getAsString();
+				
+				params.add(new BasicNameValuePair("namespace", "static-us"));
+				params.add(new BasicNameValuePair("locale", "en_US"));
+				obj = api.request("https://us.api.blizzard.com/data/wow/pet-ability/" + abilityId, params);
+				params.clear();
+				
+				int id = obj.get("id").getAsInt();
+				String name = obj.get("name").getAsString();
+				String type = obj.get("battle_pet_type").getAsJsonObject().get("type").getAsString();
+				
+				JsonObject abilityObj = new JsonObject();
+				abilityObj.addProperty("id", id);
+				abilityObj.addProperty("name", name);
+				abilityObj.addProperty("type", type);
+				data.add(abilityObj);
+				
+				System.out.printf("Added ability %s (%d/%d)\n", name, processed++, abilities.size());
+				
+			}
+			
+			JsonWriter writer = new JsonWriter(new FileWriter("ability_data.json"));
+			Json.toJson(data, writer);
+			writer.flush();
+			writer.close();
+			
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+	}
+	
+	/**
 	 * Converts the pet_data.json file into a database file.
 	 */
 	public static void createPetDatabaseFromJson() {
 		Connection conn = null;
 		try {	
-			//See if database exists. If so, delete
-			File db = new File("./pet_data.mv.db");
-			if(db.exists()) {
-				db.delete();
-			}
-			
-			//Load driver and make connection
+			// Load driver and make connection
 			Class.forName("org.h2.Driver");
-			conn = DriverManager.getConnection("jdbc:h2:./pet_data", "user", "");
+			conn = DriverManager.getConnection("jdbc:h2:./data", "user", "");
 			
-			//Create pet data table
+			// Drop existing data
 			Statement stmt = conn.createStatement();
-			String sql = "CREATE TABLE pet_data "
+			String sql = "DROP TABLE IF EXISTS pet_data";
+			stmt.execute(sql);
+			
+			sql = "DROP TABLE IF EXISTS pet_abilities";
+			stmt.execute(sql);
+			
+			// Create pet data table
+			stmt = conn.createStatement();
+			sql = "CREATE TABLE pet_data "
 					+ "("
 					+ " id INT NOT NULL,"
 					+ " name VARCHAR(255) NOT NULL,"
 					+ " type VARCHAR(255) NOT NULL,"
 					+ " is_capturable BOOL NOT NULL,"
-					+ " is_tradable BOOL NOT NULL,"
 					+ " is_battlepet BOOL NOT NULL,"
 					+ " is_alliance_only BOOL NOT NULL,"
 					+ " is_horde_only BOOL NOT NULL,"
 					+ " source VARCHAR(255) NOT NULL,"
+					+ " aquatic_ability BOOL NOT NULL DEFAULT 0,"
+					+ " beast_ability BOOL NOT NULL DEFAULT 0,"
+					+ " critter_ability BOOL NOT NULL DEFAULT 0,"
+					+ " dragonkin_ability BOOL NOT NULL DEFAULT 0,"
+					+ " elemental_ability BOOL NOT NULL DEFAULT 0,"
+					+ " flying_ability BOOL NOT NULL DEFAULT 0,"
+					+ " humanoid_ability BOOL NOT NULL DEFAULT 0,"
+					+ " magic_ability BOOL NOT NULL DEFAULT 0,"
+					+ " mechanical_ability BOOL NOT NULL DEFAULT 0,"
+					+ " undead_ability BOOL NOT NULL DEFAULT 0,"
 					+ " PRIMARY KEY ( id )"
 					+ ")";
 			stmt.execute(sql);
 			
-			//Create pet abilities table
+			// Create pet abilities table
 			sql = "CREATE TABLE pet_abilities"
 					+ "("
 					+ " pet_id INT NOT NULL,"
 					+ " ability_id INT NOT NULL,"
-					+ " CONSTRAINT pk PRIMARY KEY (pet_id, ability_id),"
-					+ " FOREIGN KEY (pet_id) REFERENCES pet_data(id)"
+					+ " CONSTRAINT pk PRIMARY KEY (pet_id, ability_id)"
 					+ ")";
 			stmt.execute(sql);
 			
-			//Load json pet data
+			// Load json pet data
 			JsonReader reader = new JsonReader(new FileReader("pet_data.json"));
 			Type type = new TypeToken<ArrayList<Pet>>() {}.getType();
 			ArrayList<Pet> pets = Json.fromJson(reader, type);
 			
 			for(Pet pet : pets) {
-				//Insert pet data
-				sql = String.format("INSERT INTO pet_data VALUES (%d, '%s', '%s', %d, %d, %d, %d, %d, '%s')", 
+				// Ignore non-tradable pets
+				if(!pet.isTradable)
+					continue;
+				
+				// Insert pet data
+				sql = String.format("INSERT INTO pet_data (id, name, type, is_capturable, is_battlepet, is_alliance_only, is_horde_only, source) "
+						+ "VALUES (%d, '%s', '%s', %d, %d, %d, %d, '%s')", 
 						pet.id,
 						pet.name.replace("'", "''"),
 						pet.type.replace("'", "''"),
 						pet.isCapturable ? 1 : 0,
-						pet.isTradable ? 1 : 0,
 						pet.isBattlepet ? 1 : 0,
 						pet.isAllianceOnly ? 1 : 0,
 						pet.isHordeOnly ? 1 : 0,
@@ -179,7 +258,7 @@ public class Utilities {
 				System.out.println(sql);
 				stmt.execute(sql);
 				
-				//Add entries for pet abilities
+				// Add entries for pet abilities
 				int[] abilities = pet.abilities;
 				for(int ability : abilities) {
 					sql = String.format("INSERT INTO pet_abilities VALUES (%d, %d)", 
@@ -194,6 +273,128 @@ public class Utilities {
 		} catch(Exception e) {
 			e.printStackTrace();
 		} finally {	
+			if(conn != null) {
+				try {
+					conn.close();
+				} catch (SQLException e) {
+					e.printStackTrace();
+				}
+			}
+		}
+	}
+	
+	/**
+	 * Creates the ability_data table using the ability_data.json
+	 * file, and updates the pet_data table to include columns for
+	 * each ability id.
+	 */
+	public static void addPetAbilityDataToDatabase() {
+		Connection conn = null;
+		try {
+			// Connect to database.
+			Class.forName("org.h2.Driver");
+			conn = DriverManager.getConnection("jdbc:h2:./data", "user", "");
+
+			// Drop existing data
+			Statement stmt = conn.createStatement();
+			String sql = "DROP TABLE IF EXISTS ability_data";
+			stmt.execute(sql);
+
+			// Create new table
+			sql = "CREATE TABLE ability_data "
+					+ "("
+					+ "id INT NOT NULL,"
+					+ "name VARCHAR(255) NOT NULL,"
+					+ "type VARCHAR(255) NOT NULL,"
+					+ "PRIMARY KEY ( id )"
+					+ ")";
+			stmt.execute(sql);
+			
+			// Read ability data from the file
+			JsonReader reader = new JsonReader(new FileReader("ability_data.json"));
+			JsonArray abilities = Json.fromJson(reader, JsonArray.class);
+			reader.close();
+			
+			for(JsonElement abilityElement : abilities) {
+				JsonObject ability = abilityElement.getAsJsonObject();
+				
+				int id = ability.get("id").getAsInt();
+				String name = ability.get("name").getAsString();
+				String type = ability.get("type").getAsString();
+				
+				sql = String.format("INSERT INTO ability_data VALUES (%d, '%s', '%s')",
+						id,
+						name.replace("'", "''"),
+						type.replace("'", "''")
+				);
+				stmt.execute(sql);
+				System.out.println(sql);
+
+				// Also add this ability id as a column to the pet_data table
+				sql = "ALTER TABLE pet_data ADD ability_" + id + " BOOL NOT NULL DEFAULT 0";
+				stmt.execute(sql);
+			}
+			
+		} catch(Exception e) {
+			e.printStackTrace();
+		} finally {
+			if(conn != null) {
+				try {
+					conn.close();
+				} catch(SQLException e) {
+					e.printStackTrace();
+				}
+			}
+		}
+	}
+	
+	/**
+	 * Updates the pet_data table in the database to set the
+	 * values for which abilities this pet possesses.
+	 */
+	public static void updatePetDataWithAbilities() {
+		Connection conn = null;
+		try {
+			// Load driver and make connection
+			Class.forName("org.h2.Driver");
+			conn = DriverManager.getConnection("jdbc:h2:./data", "user", "");
+			
+			// Look through each existing pet
+			Statement stmt = conn.createStatement();
+			String sql = "SELECT id FROM pet_data";
+			
+			ResultSet pets = stmt.executeQuery(sql);
+			
+			while(pets.next()) {
+				int petId = pets.getInt("id");
+				
+				sql = "SELECT ability_id FROM pet_abilities WHERE pet_id = " + petId;
+				ResultSet abilities = conn.createStatement().executeQuery(sql);
+				
+				// Update ability columns for the pet
+				while(abilities.next()) {
+					int abilityId = abilities.getInt("ability_id");
+					
+					sql = "UPDATE pet_data SET ability_" + abilityId + " = 1 WHERE id = " + petId;
+					conn.createStatement().executeUpdate(sql);
+					
+					System.out.println(sql);
+					
+					// Update ability types
+					sql = "SELECT type FROM ability_data WHERE id = " + abilityId;
+					ResultSet ability = conn.createStatement().executeQuery(sql);
+					
+					while(ability.next()) {
+						String type = ability.getString("type").toLowerCase();
+						sql = "UPDATE pet_data SET " + type + "_ability = 1 WHERE id = " + petId;
+						conn.createStatement().executeUpdate(sql);
+					}
+				}
+			}
+			
+		} catch(Exception e) {
+			e.printStackTrace();
+		} finally {
 			if(conn != null) {
 				try {
 					conn.close();
@@ -279,7 +480,9 @@ public class Utilities {
 	}
 	
 	/**
-	 * 
+	 * Cleans an auction data json dump file, leaving
+	 * only the auction entries which are for battle
+	 * pets.
 	 */
 	public static void cleanAuctionData() {
 		
@@ -362,7 +565,11 @@ public class Utilities {
 		System.gc();
 	}
 	
-	public static void createAuctionDatabase() {
+	/**
+	 * Builds the auction database using the cleaned auction
+	 * json files found in the present directory.
+	 */
+	public static void addAuctionDataToDatabase() {
 		// Load driver class
 		try {
 			Class.forName("org.h2.Driver");
@@ -371,23 +578,21 @@ public class Utilities {
 			return;
 		}
 		
-		// Delete database if exists
-		File db = new File("./auction_data.mv.db");
-		if(db.exists()) {
-			db.delete();
-		}
-		
 		Connection conn = null;
 		try {
-			conn = DriverManager.getConnection("jdbc:h2:./auction_data", "user", "");
+			conn = DriverManager.getConnection("jdbc:h2:./data", "user", "");
 			
 			Statement stmt = conn.createStatement();
 			
-			// Create the table if necessary
-			String sql = "CREATE TABLE auction_data ("
+			// Delete existing data
+			String sql = "DROP TABLE IF EXISTS auction_data";
+			stmt.execute(sql);
+			
+			// Create the table
+			sql = "CREATE TABLE auction_data ("
 					+ "id INT NOT NULL,"
 					+ "pet_id INT NOT NULL,"
-					+ "buyout INT NOT NULL,"
+					+ "buyout BIGINT NOT NULL,"
 					+ "realm_id INT NOT NULL,"
 					+ "PRIMARY KEY ( id )"
 					+ ")";
@@ -423,7 +628,7 @@ public class Utilities {
 							sql = String.format("INSERT INTO auction_data VALUES (%d, %d, %d, %d)", 
 									auctionObj.get("id").getAsInt(),
 									auctionObj.get("item").getAsJsonObject().get("pet_species_id").getAsInt(),
-									auctionObj.get("buyout").getAsInt(),
+									auctionObj.get("buyout").getAsLong(),
 									realmId
 							);
 							
@@ -440,6 +645,93 @@ public class Utilities {
 			
 		} catch (SQLException e) {
 			// TODO Auto-generated catch block
+			e.printStackTrace();
+		} finally {
+			if(conn != null) {
+				try {
+					conn.close();
+				} catch (SQLException e) {
+					e.printStackTrace();
+				}
+			}
+		}
+	}
+	
+	/**
+	 * Uses the auction data in the database to calculate each
+	 * pet's value and adds that value to the pet_data table.
+	 */
+	public static void calculatePetValuesAndAddToDatabase() {
+		Connection conn = null;
+		try {
+			// Load driver and make connection
+			Class.forName("org.h2.Driver");
+			conn = DriverManager.getConnection("jdbc:h2:./data", "user", "");
+			
+			// Add new column
+			String sql = "ALTER TABLE pet_data ADD (value REAL, value_winsor REAL)";
+			conn.createStatement().execute(sql);
+			
+			// Look through each pet
+			sql = "SELECT * FROM pet_data";
+			ResultSet pets = conn.createStatement().executeQuery(sql);
+			
+			while(pets.next()) {
+				int petId = pets.getInt("id");
+				
+				sql = "SELECT * FROM auction_data WHERE pet_id = " + petId + " ORDER BY realm_id";
+				ResultSet auctions = conn.createStatement().executeQuery(sql);
+				
+				ArrayList<Double> values = new ArrayList<>();
+				while(auctions.next()) {
+					double buyout = auctions.getDouble("buyout");					
+					values.add(buyout / 10000f);
+				}
+				
+				// Calculate the average value
+				float total = 0;
+				for(double f : values) {
+					total += f;
+				}
+				float avg = total / values.size();
+				
+				float std = 0;
+				for(double f : values) {
+					std += Math.pow(Math.abs(f - avg), 2);
+				}
+				std /= values.size();
+				std = (float) Math.sqrt(std);
+				
+				// Calculate the average value using a modified winsor mean method
+				Collections.sort(values);
+				float winpercent = 0.2f;
+				int edge = (int) (values.size() * winpercent);
+				for(int i = values.size() - 1; i > values.size() - edge; i--) {
+					values.set(i, values.get(values.size() - edge));
+				}
+				
+				float wintotal = 0;
+				for(double f : values) {
+					wintotal += f;
+				}
+				float winavg = wintotal / values.size();
+				
+				float winstd = 0;
+				for(double f : values) {
+					winstd += Math.pow(Math.abs(f - winavg), 2);
+				}
+				winstd /= values.size();
+				winstd = (float) Math.sqrt(winstd);
+				
+				// Print values
+				System.out.printf("Pet %s:\n\tAvg:\t%.2f\n\tStd:\t%.2f\n\tAvg_w:\t%.2f\n\tStd_w:\t%.2f\n", petId, avg, std, winavg, winstd);
+				
+				// Update database into database
+				sql = "UPDATE pet_data SET value = " + avg + ", value_winsor = " + winavg + " WHERE id = " + petId;
+				conn.createStatement().execute(sql);
+			}
+			
+		} catch (Exception e) {
 			e.printStackTrace();
 		} finally {
 			if(conn != null) {

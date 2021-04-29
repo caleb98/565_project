@@ -22,11 +22,18 @@ public class Start {
 				
 			case 1:
 				if(hasEnvironmentVariables()) {
-					Utilities.requestPetDataFromBnetApi();
+					Utilities.requestPetData();
 				}
 				break;
 				
 			case 2:
+				if(hasEnvironmentVariables()) {
+					Utilities.requestAbilityData();
+				}
+
+				break;
+				
+			case 3:
 				if(!(new File("pet_data.json")).exists()) {
 					System.out.println("pet_data.json file does not exist. Cannot create database.");
 					break;
@@ -35,20 +42,32 @@ public class Start {
 				System.out.println();
 				break;
 				
-			case 3:
+			case 4:
+				Utilities.addPetAbilityDataToDatabase();
+				break;
+				
+			case 5:
+				Utilities.updatePetDataWithAbilities();
+				break;
+				
+			case 6:
 				if(hasEnvironmentVariables()) {
 					Utilities.dumpAuctionData();
 				}
 				break;
 				
-			case 4:
+			case 7:
 				Utilities.cleanAuctionData();
 				break;
 				
-			case 5:
-				Utilities.createAuctionDatabase();
+			case 8:
+				Utilities.addAuctionDataToDatabase();
 				break;
 			
+			case 9:
+				Utilities.calculatePetValuesAndAddToDatabase();
+				break;
+				
 			}
 		}
 		
@@ -81,10 +100,14 @@ public class Start {
 		System.out.println("Select an action:");
 		System.out.println("0. Exit");
 		System.out.println("1. Request Pet Data*");
-		System.out.println("2. Build Pet Database from Json File");
-		System.out.println("3. Dump Auction Data*");
-		System.out.println("4. Clean Auction Data");
-		System.out.println("5. Create Auction Database");
+		System.out.println("2. Request Ability Data*");
+		System.out.println("3. Build Pet Database from Json File");
+		System.out.println("4. Add Ability Data to Database");
+		System.out.println("5. Update Pet Data with Abilities");
+		System.out.println("6. Dump Auction Data*");
+		System.out.println("7. Clean Auction Data");
+		System.out.println("8. Add Auction Data to Database");
+		System.out.println("9. Calculate Pet Values and Add to Database");
 		System.out.println("(*Requires BNET_CLIENT_ID and BNET_CLIENT_SECRET environment variables.)");
 	}
 	
